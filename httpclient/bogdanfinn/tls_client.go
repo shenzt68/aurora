@@ -4,20 +4,25 @@ import (
 	"aurora/httpclient"
 	"io"
 	"net/http"
+	"net/url"
+
 	fhttp "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
 )
 
 type TlsClient struct {
-	Client tls_client.HttpClient
+	Client    tls_client.HttpClient
+	ReqBefore handler
 }
+
+type handler func(r *fhttp.Request) error
 
 func NewStdClient() *TlsClient {
 	client, _ := tls_client.NewHttpClient(tls_client.NewNoopLogger(), []tls_client.HttpClientOption{
 		tls_client.WithCookieJar(tls_client.NewCookieJar()),
 		tls_client.WithTimeoutSeconds(600),
-		tls_client.WithClientProfile(profiles.Okhttp4Android13),
+		tls_client.WithClientProfile(profiles.Safari_IOS_15_5),
 	}...)
 
 	stdClient := &TlsClient{Client: client}
@@ -80,6 +85,11 @@ func (t *TlsClient) Request(method httpclient.HttpMethod, url string, headers ht
 	}
 	t.handleHeaders(req, headers)
 	t.handleCookies(req, cookies)
+	if t.ReqBefore != nil {
+		if err := t.ReqBefore(req); err != nil {
+			return nil, err
+		}
+	}
 	do, err := t.Client.Do(req)
 	if err != nil {
 		return nil, err
@@ -89,4 +99,56 @@ func (t *TlsClient) Request(method httpclient.HttpMethod, url string, headers ht
 
 func (t *TlsClient) SetProxy(url string) error {
 	return t.Client.SetProxy(url)
+}
+
+func (t *TlsClient) SetCookies(rawUrl string, cookies []*http.Cookie) {
+	if cookies == nil {
+		return
+	}
+	u, err := url.Parse(rawUrl)
+	if err != nil {
+		return
+	}
+	var fcookies []*fhttp.Cookie
+	for _, c := range cookies {
+		fcookies = append(fcookies, &fhttp.Cookie{
+			Name:       c.Name,
+			Value:      c.Value,
+			Path:       c.Path,
+			Domain:     c.Domain,
+			Expires:    c.Expires,
+			RawExpires: c.RawExpires,
+			MaxAge:     c.MaxAge,
+			Secure:     c.Secure,
+			HttpOnly:   c.HttpOnly,
+			SameSite:   fhttp.SameSite(c.SameSite),
+			Raw:        c.Raw,
+			Unparsed:   c.Unparsed,
+		})
+	}
+	t.Client.GetCookieJar().SetCookies(u, fcookies)
+}
+
+func (t *TlsClient) GetCookies(rawUrl string) []*http.Cookie {
+	currUrl, err := url.Parse(rawUrl)
+	if err != nil {
+		return nil
+	}
+
+	var cookies []*http.Cookie
+	for _, c := range t.Client.GetCookies(currUrl) {
+		cookies = append(cookies, &http.Cookie{
+			Name:       c.Name,
+			Value:      c.Value,
+			Path:       c.Path,
+			Domain:     c.Domain,
+			Expires:    c.Expires,
+			RawExpires: c.RawExpires,
+			MaxAge:     c.MaxAge,
+			Secure:     c.Secure,
+			HttpOnly:   c.HttpOnly,
+			SameSite:   http.SameSite(c.SameSite),
+		})
+	}
+	return cookies
 }
